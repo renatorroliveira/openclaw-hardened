@@ -1,0 +1,213 @@
+# ==============================================================================
+# docker-compose.yml — Hardened OpenClaw Gateway + Ollama LLM Service
+#
+# GPU Presets (default: Windows NVIDIA via .env):
+#   Windows NVIDIA: docker compose up -d
+#   Linux NVIDIA:   COMPOSE_PROFILES=nvidia OPENCLAW_PRESET=nvidia docker compose up -d
+#   Apple Silicon:  COMPOSE_PROFILES= OPENCLAW_PRESET=apple-silicon docker compose up -d
+#   AWS Bedrock:    COMPOSE_PROFILES= OPENCLAW_PRESET=bedrock docker compose up -d
+#
+# Applies runtime sandboxing that cannot be expressed in the Dockerfile:
+#   - Read-only root filesystem
+#   - All capabilities dropped except NET_ADMIN (iptables)
+#   - no-new-privileges prevents setuid escalation after entrypoint
+#   - tmpfs for writable scratch dirs
+#   - PID, memory, and file-descriptor limits
+#   - Default seccomp profile
+# ==============================================================================
+
+services:
+  openclaw-gateway:
+    build: .
+    image: openclaw-hardened:latest
+    container_name: openclaw-hardened
+    hostname: openclaw-hardened
+    restart: unless-stopped
+
+    # --- Filesystem -----------------------------------------------------------
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,noexec,nosuid
+      - /var/tmp:size=128m,noexec,nosuid
+      - /run:size=64m,noexec,nosuid
+      - /home/openclaw/.aws:size=4m,noexec,nosuid
+
+    # --- Capabilities ---------------------------------------------------------
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN          # required for iptables in entrypoint
+      - SETUID             # required for gosu privilege de-escalation
+      - SETGID             # required for gosu privilege de-escalation
+
+    # --- Security options -----------------------------------------------------
+    security_opt:
+      - no-new-privileges:true
+
+    # --- Resource limits ------------------------------------------------------
+    pids_limit: 256
+    mem_limit: 2g
+    memswap_limit: 4g
+    cpus: 2
+    ulimits:
+      nofile:
+        soft: 1024
+        hard: 2048
+      nproc: 256
+
+    # --- Environment ----------------------------------------------------------
+    environment:
+      - HOME=/home/openclaw
+      - XDG_CONFIG_HOME=/home/openclaw/.openclaw
+      - OPENCLAW_PRESET=${OPENCLAW_PRESET:-windows-nvidia}
+      - OPENCLAW_GATEWAY_BIND=lan
+      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-changeme}
+      - NODE_ENV=production
+      - NODE_OPTIONS=--max-old-space-size=2048
+      - TZ=America/Los_Angeles
+      # AWS Bedrock credentials (used when OPENCLAW_PRESET=bedrock)
+      - AWS_BEDROCK_REGION=${AWS_BEDROCK_REGION:-us-west-2}
+      - AWS_PROFILE=${AWS_PROFILE:-}
+      - AWS_REGION=${AWS_BEDROCK_REGION:-us-west-2}
+      - AWS_DEFAULT_REGION=${AWS_BEDROCK_REGION:-us-west-2}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
+
+    # --- Healthcheck ----------------------------------------------------------
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf --max-time 5 http://localhost:18789/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+    # --- Service dependencies -------------------------------------------------
+    depends_on:
+      ollama:
+        condition: service_healthy
+        required: false   # allows Apple Silicon mode (no ollama service) to work
+
+    # --- Network --------------------------------------------------------------
+    ports:
+      - "18789:18789"
+    networks:
+      - openclaw-internal
+
+    # --- Persistent storage ---------------------------------------------------
+    volumes:
+      - openclaw-config:/home/openclaw/.openclaw
+      - openclaw-workspace:/home/openclaw/workspace
+      - ${HOME}/.aws:/opt/aws-host-config:ro
+
+    # --- Logging --------------------------------------------------------------
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ============================================================================
+  # Ollama LLM Inference Server (NVIDIA GPU presets: Linux and Windows)
+  #
+  # Activated with: docker compose --profile windows-nvidia up -d  (default)
+  #            or:  docker compose --profile nvidia up -d          (Linux)
+  # For Apple Silicon, run Ollama natively on the host instead.
+  # ============================================================================
+  ollama:
+    profiles:
+      - nvidia
+      - windows-nvidia
+    build:
+      context: .
+      dockerfile: Dockerfile.ollama
+    image: openclaw-ollama:latest
+    container_name: openclaw-ollama
+    hostname: ollama
+    restart: unless-stopped
+
+    # --- Filesystem -----------------------------------------------------------
+    # NOT read_only — Ollama needs write access for model management
+    tmpfs:
+      - /tmp:size=512m,noexec,nosuid
+
+    # --- Capabilities ---------------------------------------------------------
+    cap_drop:
+      - ALL
+    cap_add:
+      - SYS_RESOURCE        # GPU memory management
+
+    # --- Security options -----------------------------------------------------
+    security_opt:
+      - no-new-privileges:true
+
+    # --- GPU access (NVIDIA) --------------------------------------------------
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - count: all
+              capabilities: [gpu]
+
+    # --- Resource limits ------------------------------------------------------
+    pids_limit: 512
+    mem_limit: 24g
+    memswap_limit: 32g
+    cpus: 8
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+      memlock:
+        soft: -1
+        hard: -1
+
+    # --- Environment ----------------------------------------------------------
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+      - OLLAMA_NUM_PARALLEL=${OLLAMA_NUM_PARALLEL:-1}
+      - OLLAMA_MAX_LOADED_MODELS=${OLLAMA_MAX_LOADED_MODELS:-1}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - OLLAMA_KV_CACHE_TYPE=${OLLAMA_KV_CACHE_TYPE:-q4_K_M}
+
+    # --- Network --------------------------------------------------------------
+    # Port 11434 is NOT published — only reachable on the internal network
+    networks:
+      - openclaw-internal
+
+    # --- Persistent storage ---------------------------------------------------
+    volumes:
+      - ollama-models:/root/.ollama
+
+    # --- Healthcheck ----------------------------------------------------------
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+    # --- Logging --------------------------------------------------------------
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+# ==============================================================================
+# Networks
+# ==============================================================================
+networks:
+  openclaw-internal:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+# ==============================================================================
+# Volumes
+# ==============================================================================
+volumes:
+  openclaw-config:
+  openclaw-workspace:
+  ollama-models:

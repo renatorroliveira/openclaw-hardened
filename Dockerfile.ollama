@@ -1,0 +1,22 @@
+# ==============================================================================
+# Dockerfile.ollama — Custom Ollama image with model preloading
+# ==============================================================================
+
+FROM ollama/ollama:latest
+
+# Install curl for healthcheck and readiness polling
+RUN apt-get update && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy and set up the entrypoint script
+COPY scripts/ollama-entrypoint.sh /usr/local/bin/ollama-entrypoint.sh
+RUN chmod +x /usr/local/bin/ollama-entrypoint.sh
+
+# OLLAMA_HOST is set via docker-compose.yml for visibility/configurability
+
+EXPOSE 11434
+
+# Persistent model storage
+VOLUME ["/root/.ollama"]
+
+ENTRYPOINT ["/usr/local/bin/ollama-entrypoint.sh"]
