@@ -19,13 +19,13 @@
         "api": "ollama",
         "models": [
           {
-            "id": "qwen3.5:9b",
+            "id": "qwen3.5-9b-hardened",
             "name": "Qwen3.5 9B",
             "reasoning": false,
-            "input": ["text"],
+            "input": ["text", "image"],
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
             "contextWindow": 131072,
-            "maxTokens": 32768
+            "maxTokens": 16384
           }
         ]
       }
@@ -34,7 +34,7 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "ollama/qwen3.5:9b",
+        "primary": "ollama/qwen3.5-9b-hardened",
         "fallbacks": []
       }
     }

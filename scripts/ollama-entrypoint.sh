@@ -1,15 +1,9 @@
 #!/bin/bash
 # ==============================================================================
-# ollama-entrypoint.sh — Start Ollama server and preload models
+# ollama-entrypoint.sh — Start Ollama server
 # ==============================================================================
-set -euo pipefail
-
-# Add or remove Ollama model tags here to change which models are pulled on
-# startup. The pull loop below skips models already present in the volume.
-# Examples: "qwen2.5:14b", "mistral-nemo:12b", "qwen3.5:9b-q8_0"
-MODELS=(
-    "qwen3.5:9b"
-)
+set -aeuo pipefail
+source .env
 
 # --------------------------------------------------------------------------
 # 1. Start Ollama server in background
@@ -41,18 +35,13 @@ until curl -sf http://localhost:11434/api/tags > /dev/null 2>&1; do
 done
 echo "[entrypoint] Ollama API is ready (took ~${ELAPSED}s)"
 
-# --------------------------------------------------------------------------
-# 3. Pull models (skip if already present)
-# --------------------------------------------------------------------------
-for MODEL in "${MODELS[@]}"; do
-    if ollama list | grep -q "^${MODEL}"; then
-        echo "[entrypoint] Model '${MODEL}' already present — skipping pull"
-    else
-        echo "[entrypoint] Pulling model '${MODEL}'..."
-        ollama pull "$MODEL"
-        echo "[entrypoint] Model '${MODEL}' pulled successfully"
-    fi
-done
+if ollama list | grep -q "^qwen3.5-9b-hardened"; then
+    echo "[entrypoint] Models already present — skipping pull"
+else
+    echo "[entrypoint] Pulling models..."
+    ollama create qwen3.5-9b-hardened -f /root/models/qwen3.5-9b-hardened/Modelfile
+    echo "[entrypoint] Models created successfully"
+fi
 
 echo "[entrypoint] All models ready. Ollama is serving on ${OLLAMA_HOST:-0.0.0.0:11434}"
 
