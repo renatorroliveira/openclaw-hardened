@@ -53,7 +53,7 @@ Models use **global inference profiles** (`global.*` prefix) for cross-region ro
 - **Windows NVIDIA preset** (default): Windows 11+ with [Docker Desktop](https://docs.docker.com/desktop/install/windows-install/) (WSL2 backend) and NVIDIA GPU with up-to-date drivers
 - **Linux NVIDIA preset**: Linux host with [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) installed
 - **Apple Silicon preset**: macOS with Apple M-series chip and [Ollama](https://ollama.com/download) installed natively
-- **Bedrock preset**: AWS account with [Bedrock model access enabled](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html) and configured AWS credentials (`~/.aws/credentials` or environment variables)
+- **Bedrock preset**: AWS account with [Bedrock model access enabled](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html) and AWS credentials available as environment variables (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`, or `AWS_SESSION_TOKEN` for temporary credentials)
 
 ## Quick Start
 
@@ -107,50 +107,18 @@ AWS Bedrock provides cloud-based inference with Claude models — no local GPU r
 
 **Prerequisite:** Enable model access for Anthropic Claude models in the [AWS Bedrock Console](https://console.aws.amazon.com/bedrock/home#/modelaccess) for your chosen region.
 
-**Method A: Static access keys** (simplest, for quick testing)
+Credentials are passed to the container via environment variables in `.env`. Set the following, then start:
 
 ```bash
-# 1. Set credentials in .env
+# 1. Configure credentials in .env
 #    AWS_BEDROCK_REGION=us-west-2
 #    AWS_ACCESS_KEY_ID=AKIA...
 #    AWS_SECRET_ACCESS_KEY=...
+#    AWS_SESSION_TOKEN=...   # only needed for temporary/assumed-role credentials
 
 # 2. Build and start (no Ollama container)
 COMPOSE_PROFILES= OPENCLAW_PRESET=bedrock docker compose up -d
 ```
-
-**Method B: AWS CLI profile** (recommended for development)
-
-```bash
-# 1. Configure credentials on your host
-aws configure --profile openclaw
-
-# 2. Set profile in .env
-#    AWS_BEDROCK_REGION=us-west-2
-#    AWS_PROFILE=openclaw
-
-# 3. Build and start
-COMPOSE_PROFILES= OPENCLAW_PRESET=bedrock docker compose up -d
-```
-
-**Method C: SSO** (enterprise)
-
-```bash
-# 1. Configure and login on your host
-aws configure sso
-aws sso login --profile your-sso-profile
-
-# 2. Set profile in .env
-#    AWS_BEDROCK_REGION=us-west-2
-#    AWS_PROFILE=your-sso-profile
-
-# 3. Build and start
-COMPOSE_PROFILES= OPENCLAW_PRESET=bedrock docker compose up -d
-```
-
-> **Note:** SSO tokens expire after 8-12 hours. Re-run `aws sso login` on the host and restart the container to re-stage credentials.
-
-> **Windows WSL2 note:** `$HOME/.aws` resolves to the WSL2 home directory, not the Windows home. Either copy your credentials to `~/.aws` inside WSL2 or use environment variables (Method A).
 
 ## Project Structure
 
@@ -242,10 +210,9 @@ These are set in `docker-compose.yml` under the `ollama` service:
 | `NODE_ENV` | `production` | Node.js environment |
 | `TZ` | `America/Los_Angeles` | Container timezone |
 | `AWS_BEDROCK_REGION` | `us-west-2` | AWS region for Bedrock API endpoint (Bedrock preset only) |
-| `AWS_PROFILE` | *(unset)* | AWS CLI profile name (Bedrock preset only) |
-| `AWS_ACCESS_KEY_ID` | *(unset)* | AWS static access key (Bedrock preset only) |
-| `AWS_SECRET_ACCESS_KEY` | *(unset)* | AWS static secret key (Bedrock preset only) |
-| `AWS_SESSION_TOKEN` | *(unset)* | AWS session token for temporary credentials (Bedrock preset only) |
+| `AWS_ACCESS_KEY_ID` | *(unset)* | AWS access key ID (Bedrock preset only) |
+| `AWS_SECRET_ACCESS_KEY` | *(unset)* | AWS secret access key (Bedrock preset only) |
+| `AWS_SESSION_TOKEN` | *(unset)* | AWS session token for temporary/assumed-role credentials (Bedrock preset only) |
 
 ## Security
 
@@ -263,7 +230,7 @@ The stack applies defense-in-depth at every layer:
 | **Resource limits** | 2 GB RAM, 2 CPUs, 256 PIDs, 2048 open files |
 | **PID 1 init** | `tini` handles zombie reaping and signal forwarding |
 | **Privilege de-escalation** | `gosu` drops from root to `openclaw` after firewall setup |
-| **AWS credential staging** | Host `~/.aws` bind-mounted read-only, copied to tmpfs at `/home/openclaw/.aws` (Bedrock preset) — credentials exist only in memory, never on persistent storage |
+| **AWS credential isolation** | AWS credentials injected via environment variables only (Bedrock preset) — never written to disk, not present in the image, no bind mounts required |
 
 ### Ollama (NVIDIA Preset)
 
@@ -586,23 +553,15 @@ The default model (`qwen3.5:9b`) is ~6.6 GB. On first start, the Ollama containe
 
 ### AWS credentials not found (Bedrock)
 
-The entrypoint copies host `~/.aws` to a tmpfs inside the container. If `aws sts get-caller-identity` fails:
+Credentials are passed via environment variables. If `aws sts get-caller-identity` fails:
 
-- **Using profile-based auth:** Verify `~/.aws/credentials` and `~/.aws/config` exist on your host. Check that `AWS_PROFILE` is set in `.env`.
-- **Using environment variables:** Verify `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are set in `.env` (uncommented, non-empty).
-- **Check staging logs:** `docker compose logs openclaw-gateway | grep -i aws`
+- Verify `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` are set in `.env` (uncommented and non-empty).
+- If using temporary credentials, verify `AWS_SESSION_TOKEN` is also set and not expired.
+- Verify `AWS_BEDROCK_REGION` matches the region where model access is enabled.
 
 ### Bedrock model access denied
 
 If inference fails with `AccessDeniedException`, enable model access in the [AWS Bedrock Console](https://console.aws.amazon.com/bedrock/home#/modelaccess) for your region. Model access must be explicitly granted even for pay-per-use models.
-
-### SSO token expired (Bedrock)
-
-SSO tokens expire after 8-12 hours. Re-run `aws sso login --profile <your-profile>` on the host, then restart the container to re-stage credentials:
-
-```bash
-docker compose restart openclaw-gateway
-```
 
 ### Switching from Ollama to Bedrock (or vice versa)
 

@@ -149,4 +149,4 @@ When modifying the Dockerfile or compose file, preserve these hardening controls
 - Firewall rules are in the `apply-firewall.sh` heredoc inside `Dockerfile` (lines 97-139)
 - Ollama container drops ALL capabilities, adds only `SYS_RESOURCE` (GPU memory)
 - Resource limits are set in `docker-compose.yml` (gateway: 2GB/2CPU, ollama: 24GB/8CPU)
-- AWS credentials (Bedrock preset) are staged from host `~/.aws` bind mount to tmpfs at `/home/openclaw/.aws` — never written to disk or persistent volumes
+- AWS credentials (Bedrock preset) are passed via environment variables only — never written to disk, no bind mounts, not present in the image

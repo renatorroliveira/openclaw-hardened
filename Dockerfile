@@ -152,28 +152,11 @@ set -e
 
 # --- Unset empty AWS env vars (preserves SDK credential chain fallback) ---
 # Docker Compose sets these to empty string when not configured in .env;
-# an empty AWS_ACCESS_KEY_ID breaks the SDK's fallback to profile/IMDS.
-for var in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_PROFILE; do
+# an empty AWS_ACCESS_KEY_ID breaks the SDK's fallback to IMDS/instance roles.
+for var in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; do
     eval "val=\${$var:-}"
     [ -z "$val" ] && unset "$var"
 done
-
-# --- AWS credential staging (Bedrock preset) ---
-# Host ~/.aws is bind-mounted read-only at /opt/aws-host-config.
-# Copy to tmpfs-backed /home/openclaw/.aws with correct ownership
-# (host files may be unreadable by openclaw uid 1100).
-if [ -d /opt/aws-host-config ] && [ "$(ls -A /opt/aws-host-config 2>/dev/null)" ]; then
-    mkdir -p /home/openclaw/.aws
-    cp -a /opt/aws-host-config/. /home/openclaw/.aws/ 2>/dev/null || true
-    chown -R openclaw:openclaw /home/openclaw/.aws
-    chmod 700 /home/openclaw/.aws
-    chmod 600 /home/openclaw/.aws/* 2>/dev/null || true
-    if [ -f /home/openclaw/.aws/credentials ] || [ -f /home/openclaw/.aws/config ]; then
-        echo "[entrypoint] AWS credentials staged to /home/openclaw/.aws"
-    else
-        echo "[entrypoint] WARNING: ~/.aws mounted but no credentials/config found"
-    fi
-fi
 
 # --- Deploy default config on first boot ---
 # Run as openclaw user since DAC_OVERRIDE is dropped (root can't write to openclaw-owned dirs)
